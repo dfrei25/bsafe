@@ -1,0 +1,545 @@
+#!/usr/bin/env bash
+#
+# bstart: rootless script to sandbox applications using bwrap, importing/using official firejail rule sets
+
+
+# adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
+firejail_profile_dir="/etc/firejail"
+
+
+#### global variables/arrays
+
+# array for files with read/write access
+declare -a rw_files=() 
+declare -a ro_files=()
+# array for all environment variables to permit
+declare -a env_vars=()
+# array that will store all final arguments for bwrap
+declare -a bwrap_args=()
+# optional runtime switches, see help
+declare showcommand dryrun verbose
+# the set of permissions to be served to the application
+declare application_profile=""
+# the main firejail profile for the application
+declare firejail_profile=""
+# command running in bwrap sandbox...
+declare _command=""
+# ...and it's arguments
+declare -a command_arguments=()
+
+
+#### functions
+
+show_help() {
+  cat << EOF
+Usage: $0 [option] command args
+
+Options:
+  -h, --help              # print this help
+  -s, --showcommand       # print the bwrap command to be executed
+  -d, --dryrun            # don't execute the command
+  -v, --verbose           # more output
+  -p=name, --profile=name # manual select a profile
+
+Examples:
+  $0 firefox google.com   # Open google.com in sandboxed firefox
+  $0 steam                # Start sandboxed steam
+  $0 -p=firefox dolphin   # Open Dolphin with firefox profile
+  $0 -s -d discord        # Show discord launch command, but do not execte
+  $0 zsh                  # Start sandboxed shell
+
+EOF
+}
+
+# Check: Is bwrap command available?
+validate_requirements() {
+  if ! command -v bwrap &>/dev/null; then
+    echo "Error: bubblewrap (bwrap) is not installed or not in PATH"
+    exit 1
+  fi
+}
+
+# argument handling, see help
+parse_userinput() {
+  # no arguments provided
+  [[ $# -eq 0 ]] && echo "Error: No command specified" >&2 && show_help && exit 1
+  
+  for i in "$@"; do
+    case $i in
+      -h|--help)
+        show_help && exit 0
+        ;;
+      -p*|--profile*)
+        application_profile="${1#*=}"
+        shift # next argument
+        ;;
+      -s|--showcommand)
+        showcommand=1
+        shift
+        ;;
+      -d|--dryrun)
+        dryrun=1
+        shift
+        ;;
+      -v|verbose)
+        verbose=1
+        shift
+        ;;
+      *)
+        # when all options are processed, break
+        break
+        ;;
+    esac
+  done
+
+  # parse command and check if it is valid
+  if command -v "$1" >/dev/null 2>&1; then
+    _command="$1"
+    shift
+  else
+    echo "Error: Command \"""$1""\" not found" >&2
+    exit 1
+  fi
+
+  # assign the rest of the user input as commands arguments
+  command_arguments=("${@}")
+}
+
+# Load a firefail.profile file by first recursively adding all includes
+# and then parsing/importing whitelist directories/files to rw_files or ro_files arrays
+# 
+# Usage: load_firejail_profile profile_path
+#
+load_firejail_profile(){
+
+  if ! cd "$firejail_profile_dir" 2>/dev/null; then # also change dir
+    echo "Warning: Firejail profile directory '$firejail_profile_dir' not found, firejail profile based white list permissions will be missing." >&2
+    return 1
+  fi
+  
+  local profile_path="$1"
+  local -a include_files=()
+
+  # return if firejail profile does not exist
+  if ! [[ -r "$profile_path" ]];then
+    cd "$OLDPWD" || return 1 # return to suppress shellcheck warning
+    return 1
+  fi
+
+  # Recursively get all include files from the provided firejail profile 
+  # file and add them to the array include_files 
+  #
+  # Usage: get_include_files profile_path
+  #
+  get_include_files(){
+    local profile_path="$1"
+
+    while IFS= read -r sub_profile_path;do
+      if [[ -r "$sub_profile_path" ]];then
+        include_files+=("$sub_profile_path")
+        [[ -n "$debug" ]] && echo "+include $sub_profile_path"
+        get_include_files "$sub_profile_path"
+      fi
+    done < <(awk '/^include.*\.profile$/ || /^include.*\.inc$/ { if ($2 !~ /^disable.*/) print $2 }' "$profile_path")
+  }
+
+  # Print all whitelist paths filtered by search_string from filenames
+  # provided in local array include_files
+  #
+  # Usage: print_firejail_whitelist search_string -> newline separated list of strings
+  #
+  print_firejail_whitelist(){
+    for file in "${include_files[@]}";do
+      local search_string="$1"
+
+      while IFS= read -r dirtypath;do # dirtypath in $(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file");do
+        dirtypath="${dirtypath/\$\{HOME\}/$HOME}"
+        dirtypath="${dirtypath/\$\{RUNUSER\}/$XDG_RUNTIME_DIR}"
+        dirtypath="${dirtypath/\$\{DOWNLOADS\}/$HOME\/Downloads}"
+        # sanitize path and only allow characters that occur in firejail profiles
+        imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')"
+
+        for path in $dirtypath;do
+          [[ -e "$path" ]] && printf '%s\n' "$path"
+        done
+      done < <(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file")
+    done
+    unset include_files
+  }
+
+  # add whitelist files filtered by search_string to array_name
+  #
+  # whitelist_to_array search_string array_name
+  whitelist_to_array(){
+    local search_string="$1"
+    local arrayname="$2"
+
+    while IFS= read -r whitelist_file;do
+      [[ -n $debug ]] && echo "+$arrayname $whitelist_file"
+      eval "$arrayname"'+=("$whitelist_file")'
+    done < <(print_firejail_whitelist "$search_string")
+  }
+
+  # add the main profile to include files
+  include_files+=("$profile_path")
+  # and recursively all includes from the main profile
+  get_include_files "$profile_path"
+
+  # add filtered white list firejail files to the propper array
+  whitelist_to_array '^whitelist ' 'rw_files'
+  whitelist_to_array '^read-only ' 'ro_files'
+  whitelist_to_array '^whitelist-ro ' 'ro_files'
+
+  if [[ -n "$debug" ]];then
+    printf '\nrw_files:\n\n %s\n' "${rw_files[*]}"
+    printf '\nro_files:\n\n %s\n' "${ro_files[*]}"
+  fi
+
+  cd "$OLDPWD" || return 1 # change back dir
+  
+  [[ -n $verbose ]] && echo "Loaded firejail profile: $firejail_profile"
+}
+
+# build the final bwrap arguments
+build_bwrap_args_array() {
+  local sorted_unique line
+  
+  # TODO: deduplicate code
+  # 1) Process read-write files
+  if [[ ${#rw_files[@]} -gt 0 ]]; then
+    # Deduplication using sort -u
+    sorted_unique=$(printf '%s\n' "${rw_files[@]}" | sort -u)
+    while IFS= read -r line; do
+      # no file provided or it doesn't exist/is not readable
+      [[ -z "$line" || ! -r "$line" ]] && continue
+      bwrap_args+=(--bind "$line" "$line")
+    done <<< "$sorted_unique"
+  fi
+  
+  # 2) Process read-only files
+  if [[ ${#ro_files[@]} -gt 0 ]]; then
+    # Deduplication using sort -u
+    sorted_unique=$(printf '%s\n' "${ro_files[@]}" | sort -u)
+    while IFS= read -r line; do
+      # no file provided or it doesn't exist/is not readable
+      [[ -z "$line" || ! -r "$line" ]] && continue
+      bwrap_args+=(--ro-bind "$line" "$line")
+    done <<< "$sorted_unique"
+  fi
+
+  # 3) Process environment variables
+  # FIXME: Currently breaks in case envvar contains spaces
+  local var
+  for var in "${env_vars[@]}"; do
+    [[ -n "${!var:-}" ]] && bwrap_args+=(--setenv "$var" "${!var}")
+  done
+
+  bwrap_args+=("${_command} ${command_arguments[@]}")
+}
+
+
+#### Profile categories
+
+# drop as much as possible. The whole script is bottom-up designed
+restrict_everything() {
+  bwrap_args+=(
+    # drop all capabilities by default. This should be bwrap default, however
+    --cap-drop ALL
+    # unshare all namespaces by default
+    --unshare-user
+    --unshare-ipc
+    --unshare-pid
+    --unshare-net
+    --unshare-uts
+    --unshare-cgroup
+    # disconnect from terminal, so sandbox can't inject input into the terminal
+    --new-session
+    # Ensures child process (COMMAND) dies when bwrap's parent dies (SIGKILL)
+    --die-with-parent
+    --clearenv
+  )
+}
+
+# essential/general stuff to run most applications
+allow_basics() {
+  bwrap_args+=(
+    --proc /proc
+    --dev-bind /dev /dev # might wanna be more restrictive here
+    --tmpfs /tmp
+    --tmpfs /run
+    --tmpfs /home
+    --ro-bind /etc /etc  # might wanna not allow this in future
+    --ro-bind /sys /sys
+    --ro-bind /usr /usr  # might wanna not allow this in future
+    --ro-bind /opt /opt
+    --ro-bind-try /dev/null "$HOME/.zshrc"
+    --symlink usr/lib /lib
+    --symlink usr/lib64 /lib64
+    --symlink usr/bin /bin
+    --symlink usr/bin /sbin
+  )
+  ro_files+=(
+    /etc
+    /sys
+    /usr
+    /opt
+  )
+  rw_files+=("$HOME/Downloads") # always available
+  env_vars+=(
+    "PATH"
+    "HOME"
+    "JAVAC"
+    "JAVA_HOME"
+    "JDK_HOME"
+    "LANG"
+    "LC_COLLATE"
+    "LC_MESSAGES"
+    "LOGNAME"
+    "USER"
+    "XDG_CONFIG_DIRS"
+    "XDG_CONFIG_HOME"
+    "XDG_DATA_DIRS"
+    "XDG_RUNTIME_DIR"
+    "XDG_SESSION_CLASS"
+  )
+}
+
+allow_sound() {
+  rw_files+=(
+    "$HOME/.config/pulse"
+    "$XDG_RUNTIME_DIR/pipewire-0"
+    "$XDG_RUNTIME_DIR/pipewire-0.lock"
+    "$XDG_RUNTIME_DIR/pulse"
+  )
+}
+
+allow_net() {
+  bwrap_args+=(--share-net)
+  ro_files+=(
+    "/run/systemd/resolve"
+    "/etc/resolv.conf"
+    "/etc/nsswitch.conf"
+    "/run/NetworkManager/resolv.conf"
+  )
+}
+
+allow_gui() {
+  env_vars+=(
+    "DISPLAY"
+    "GDK_BACKEND"
+    "GSETTINGS_BACKEND"
+    "GTK2_RC_FILES"
+    "GTK_THEME"
+    "GTK_USE_PORTAL"
+    "LIBVA_DRIVERS_PATH"
+    "LIBVA_DRIVER_NAME"
+    "QT_QPA_PLATFORM"
+    "QT_STYLE_OVERRIDE"
+    "SDL_VIDEODRIVER"
+    "WAYLAND_DISPLAY"
+    "XCURSOR_SIZE"
+    "XCURSOR_THEME"
+    "XDG_CURRENT_DESKTOP"
+    "XDG_MENU_PREFIX"
+    "XDG_SEAT"
+    "XDG_SESSION_DESKTOP"
+    "XDG_SESSION_ID"
+    "XDG_SESSION_TYPE"
+    "XDG_VTNR"
+    "MESA_VK_DEVICE_SELECT"
+  )
+  ro_files+=(
+    "$HOME/.Xauthority"
+    "$XDG_CONFIG_HOME/mimeapps.list" # doesn't really belong here
+  )
+  rw_files+=(
+    "$XDG_RUNTIME_DIR/wayland-1"
+    "$XDG_RUNTIME_DIR/wayland-1.lock"
+    "/tmp/.X11-unix/X0"
+  )
+}
+
+allow_dbus() {
+  env_vars+=(
+    "DBUS_SESSION_BUS_ADDRESS"
+    "I3SOCK"
+    "SWAYSOCK"
+  )
+
+  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    local dbusdir
+    dbusdir=$(echo "${DBUS_SESSION_BUS_ADDRESS}" | sed -e 's/.*unix:path=//' -e 's/,.*$//')
+    rw_files+=("$dbusdir")
+  fi
+  
+  local atspi_dir="$XDG_RUNTIME_DIR/at-spi"
+  [[ ! -d "$atspi_dir" ]] && mkdir -p "$atspi_dir" && rw_files+=("$atspi_dir")
+  [[ -e /run/dbus/system_bus_socket ]] && rw_files+=(/run/dbus/system_bus_socket)
+  [[ -d "$XDG_RUNTIME_DIR/dbus-1" ]] && rw_files+=("$XDG_RUNTIME_DIR/dbus-1")
+  [[ -e "$XDG_RUNTIME_DIR/bus" ]] && rw_files+=("$XDG_RUNTIME_DIR/bus")
+}
+
+allow_term() {
+  env_vars+=(
+    "COLORTERM"
+    "EDITOR"
+    "INFOPATH"
+    # "LESS"
+    # "LESSOPEN"
+    "LEX"
+    "MANPAGER"
+    "MANPATH"
+    "MOTD_SHOWN"
+    "NNN_FIFO"
+    "NNN_PLUG"
+    "OLDPWD"
+    "PAGER"
+    "PATH"
+    "PWD"
+    "SHELL"
+    "SHLVL"
+    "TERM"
+    "TERMINFO_DIRS"
+  )
+}
+
+allow_rwhome() {
+  rw_files+=(
+    "$HOME"
+  )
+}
+
+allow_userns() {
+  local new_bwrap_args=()
+  local arg
+  for arg in "${bwrap_args[@]}"; do
+    # re-add all but --unshare-user arg to the new array
+    [[ "$arg" != "--unshare-user" ]] && new_bwrap_args+=("$arg")
+  done
+  bwrap_args=("${new_bwrap_args[@]}")
+}
+
+allow_games() {
+  local env_vars+=(
+    "DXVK_ASYNC"
+    "STEAM_RUNTIME"
+    "STEAM_RUNTIME_PREFER_HOST_LIBRARIES"
+    "WINEDEBUG"
+    "PROTON_ENABLE_WAYLAND"
+  )
+  rw_files+=(
+    "$HOME/.local/Terraria"
+    "$HOME/.factorio"
+  )
+}
+
+# profile sync daemon
+allow_psd() {
+  rw_files+=("$XDG_RUNTIME_DIR/psd")
+}
+
+# screenshot dir
+allow_screenshot_dir() {
+  ro_files+=("$HOME/Nextcloud/Pictures/Screenshots")
+}
+
+# permission settings per app
+# categories: gui sound dbus userns net games term screenshot_dir psd rwhome
+select_profile(){
+  local app_profile="$1"
+
+  case $1 in
+    steam)
+      allow_gui
+      allow_sound
+      allow_dbus
+      allow_net
+      allow_games
+      ;;
+    zsh)
+      allow_gui
+      allow_sound
+      allow_net
+      allow_term
+      ro_files+=("$HOME/.zshrc")
+      #bwrap_args+=(--setenv PS1 '(bwrap)[%F{green}%n%f@%F{blue}%m%B%~%b%f]') # sandbox indicator
+      ;;
+    discord)
+      allow_gui
+      allow_sound
+      allow_dbus
+      allow_net
+      allow_sound
+      allow_screenshot_dir
+      rw_files+=("$HOME/.config/discord")
+      ro_files+=(/opt/discord)
+      ;;
+    firefox)
+      allow_gui
+      allow_sound
+      allow_dbus
+      allow_net
+      allow_screenshot_dir
+      allow_psd  # profile-sync-daemon
+      env_vars+=(
+        "MOZ_DRM_DEVICE"
+        "MOZ_GMP_PATH"
+      )
+      firejail_profile="firefox-esr"
+      ;;
+    hexchat)
+      allow_gui
+      allow_sound
+      allow_dbus
+      allow_net
+      ;;
+    *)
+      return 1;
+      ;;
+  esac
+
+  # when no firejail profile got selected, default to app_profile
+  if [[ -z $firejail_profile ]];then
+    firejail_profile="$app_profile"
+  fi
+
+  # try to load firejail profile
+  load_firejail_profile "$firejail_profile.profile"
+}
+
+
+#### Main execution
+
+# check if requirements are met and arguments are correct
+validate_requirements
+
+# apply options like "showcommand" and seperate them from _command and command_arguments
+parse_userinput "${@}"
+
+# black everything first, we start from scratch
+restrict_everything
+
+# load "fundamental" permissions, like accessing /usr/bin
+allow_basics
+
+# when no application profile got manually selected, default to command
+if [[ -z $application_profile ]];then
+  application_profile="${_command}"
+fi
+
+# load application profile (if existing)
+if select_profile "$application_profile";then
+  [[ -n $verbose ]] && echo "Loaded application profile: $application_profile"
+fi
+
+# build final bwrap argument list
+build_bwrap_args_array
+
+# print command when desired
+[[ -n $showcommand ]] && printf '\nThe following command will be executed:\n\nbwrap %s\n\n' "${bwrap_args[*]}"
+
+# quit without executing the command when selected
+[[ -n $dryrun ]] &&  exit 0
+
+# Run the command
+bwrap ${bwrap_args[@]}
