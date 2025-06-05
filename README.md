@@ -2,7 +2,7 @@
 
 a lightweight rootless profile based sandbox solution using bwrap.
 
-*Firejail profile usage is optionally supported, but Firejail has to be installed separately. This will grant access to a much larger set of whitelisted files/directories.*
+*(Firejail profile usage is optionally supported, but Firejail has to be installed separately. This will grant access to a much larger set of whitelisted files/directories.)*
 
 ## Running the sandbox
 
@@ -15,9 +15,9 @@ bJail -d -s discord      # dryrun & print the bwrap command that would be execut
 bJail -p=firefox bash    # launch a shell with firefox profile active
 ```
 
-
 ## Compared startup time
 ![podman firejail and bJail startup times compared](/assets/images/startuptime.jpg)
+
 ## Profile demo
 ![home folder files visible to sandboxed firefox](/assets/images/profiledemo.jpg)
 
@@ -27,6 +27,3 @@ bJail -p=firefox bash    # launch a shell with firefox profile active
 - As this project started locally as a little personal script, future rework will be done increasing readability
 - split the script into more files, making it easier to maintain
 - awaiting feedback/adding community ideas
-- 
-
-
