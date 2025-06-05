@@ -272,7 +272,6 @@ allow_basics() {
     --ro-bind /sys /sys
     --ro-bind /usr /usr  # might wanna not allow this in future
     --ro-bind /opt /opt
-    --ro-bind-try /dev/null "$HOME/.zshrc"
     --symlink usr/lib /lib
     --symlink usr/lib64 /lib64
     --symlink usr/bin /bin
@@ -380,6 +379,7 @@ allow_dbus() {
 }
 
 allow_term() {
+  ro_files+=("$HOME/.zshrc")
   env_vars+=(
     "COLORTERM"
     "EDITOR"
@@ -438,11 +438,6 @@ allow_psd() {
   rw_files+=("$XDG_RUNTIME_DIR/psd")
 }
 
-# screenshot dir
-allow_screenshot_dir() {
-  ro_files+=("$HOME/Nextcloud/Pictures/Screenshots")
-}
-
 # permission settings per app
 # categories: gui sound dbus userns net games term screenshot_dir psd rwhome
 select_profile(){
@@ -470,7 +465,6 @@ select_profile(){
       allow_dbus
       allow_net
       allow_sound
-      allow_screenshot_dir
       rw_files+=("$HOME/.config/discord")
       ro_files+=(/opt/discord)
       ;;
@@ -479,7 +473,6 @@ select_profile(){
       allow_sound
       allow_dbus
       allow_net
-      allow_screenshot_dir
       allow_psd  # profile-sync-daemon
       env_vars+=(
         "MOZ_DRM_DEVICE"
