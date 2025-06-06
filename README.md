@@ -26,4 +26,6 @@ bJail -p=firefox bash    # launch a shell with firefox profile active
 - Seccomp fine gained support is planed, utilizing bwraps `--seccomp` feature.
 - As this project started locally as a little personal script, future rework will be done increasing readability
 - split the script into more files, making it easier to maintain
+- find a better parsing solution for firejail profiles, add ${PICTURES} ${VIDEOS} and possibly other missed variables.
+- implement suggestions from #bash irc
 - awaiting feedback/adding community ideas
