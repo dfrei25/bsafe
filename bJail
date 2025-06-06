@@ -468,6 +468,11 @@ select_profile(){
       rw_files+=("$HOME/.config/discord")
       ro_files+=(/opt/discord)
       ;;
+    google-chrome-stable)
+      allow_gui
+      allow_sound
+      allow_net
+      ;;
     firefox)
       allow_gui
       allow_sound
