@@ -167,7 +167,9 @@ load_firejail_profile(){
         imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')" # fixme: replace tr with bash expensions
 
         for path in $dirtypath;do # loop here, since dirtypath can also be '$XDG_RUNTIME_DIR/psd/*firefox*' which here resolves possibly into multiple paths
+        #while IFS= read -r path; do
           [[ -e "$path" ]] && printf '%s\n' "$path"
+        #done <<<$dirtypath
         done
       done < <(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file")
       #done <$file # attempt with bash expansions 
@@ -183,7 +185,7 @@ load_firejail_profile(){
     local arrayname="$2"
 
     while IFS= read -r whitelist_file;do
-      [[ -n $debug ]] && echo "+$arrayname $whitelist_file"
+      #[[ -n $debug ]] && echo "+$arrayname $whitelist_file"
       eval "$arrayname"'+=("$whitelist_file")'
     done < <(print_firejail_whitelist "$search_string")
   }
