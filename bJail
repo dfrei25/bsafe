@@ -154,11 +154,11 @@ load_firejail_profile(){
   #          [...]
   #
   print_firejail_whitelist(){
-    for file in "${include_files[@]}";do
-      local search_string="$1"
+    local search_string="$1"
 
+    for file in "${include_files[@]}";do
       while IFS= read -r dirtypath;do
-        #[[ $dirtypath =~ $search_string(.*) ]]
+        #[[ $dirtypath =~ $search_string(.*) ]] # attempt with bash expansions
         dirtypath="${dirtypath/\$\{HOME\}/$HOME}" 
         dirtypath="${dirtypath/\$\{RUNUSER\}/$XDG_RUNTIME_DIR}"
         dirtypath="${dirtypath/\$\{DOWNLOADS\}/$HOME\/Downloads}"
@@ -170,9 +170,9 @@ load_firejail_profile(){
           [[ -e "$path" ]] && printf '%s\n' "$path"
         done
       done < <(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file")
-      #done <$file
+      #done <$file # attempt with bash expansions 
     done
-    unset include_files
+    #unset include_files
   }
 
   # add whitelist files filtered by search_string to array_name
@@ -241,8 +241,6 @@ build_bwrap_args_array() {
   for var in "${env_vars[@]}"; do
     [[ -n "${!var:-}" ]] && bwrap_args+=(--setenv "$var" "${!var}")
   done
-
-  bwrap_args+=("${_command} ${command_arguments[@]}")
 }
 
 
@@ -548,4 +546,4 @@ build_bwrap_args_array
 [[ -n $dryrun ]] &&  exit 0
 
 # Run the command
-bwrap ${bwrap_args[@]}
+bwrap ${bwrap_args[@]} ${_command} ${command_arguments[@]}
