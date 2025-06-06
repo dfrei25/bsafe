@@ -166,7 +166,7 @@ load_firejail_profile(){
         # fixme1: add a proper way handle comments '#' and whitespaces ' '
         imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')" # fixme: replace tr with bash expensions
 
-        for path in $dirtypath;do # loop here, since dirtypath can also be '$XDG_RUNTIME_DIR/psd/*firefox*' which here resolves possibly into multiple paths
+        IFS=;for path in $dirtypath;do # loop here, since dirtypath can also be '$XDG_RUNTIME_DIR/psd/*firefox*' which here resolves possibly into multiple paths
         #while IFS= read -r path; do
           [[ -e "$path" ]] && printf '%s\n' "$path"
         #done <<<$dirtypath
@@ -548,5 +548,4 @@ build_bwrap_args_array
 [[ -n $dryrun ]] &&  exit 0
 
 # Run the command
-#bwrap ${bwrap_args[@]} ${_command} ${command_arguments[@]}
-bwrap --args 9 "${_command}" --args 10 9<(printf '%s\0' "{bwrap_args[@]}") 10<(printf '%s\0' "${command_arguments[@]}")
+bwrap --args 9 "${_command}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}")
