@@ -546,4 +546,5 @@ build_bwrap_args_array
 [[ -n $dryrun ]] &&  exit 0
 
 # Run the command
-bwrap ${bwrap_args[@]} ${_command} ${command_arguments[@]}
+#bwrap ${bwrap_args[@]} ${_command} ${command_arguments[@]}
+bwrap --args 9 ${_command} --args 10 9<(printf '%\0' {bwrap_args[@]}) 10<(printf '%\0' ${command_arguments[@]}) 
