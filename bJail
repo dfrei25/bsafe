@@ -8,7 +8,7 @@ firejail_profile_dir="/etc/firejail"
 
 
 #### global variables/arrays
-
+#set -x
 # array for files with read/write access
 declare -a rw_files=() 
 declare -a ro_files=()
@@ -148,28 +148,36 @@ load_firejail_profile(){
   #
   # Usage: print_firejail_whitelist search_string -> newline separated list of strings
   #
+  # Example: include_files=("/etc/firejail/firefox.profile"); print_firejail_whitelist "^whitelist " -> 
+  #          ${HOME}/.cache/mozilla/firefox
+  #          ${HOME}/.mozilla
+  #          [...]
+  #
   print_firejail_whitelist(){
     for file in "${include_files[@]}";do
       local search_string="$1"
 
-      while IFS= read -r dirtypath;do # dirtypath in $(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file");do
-        dirtypath="${dirtypath/\$\{HOME\}/$HOME}"
+      while IFS= read -r dirtypath;do
+        #[[ $dirtypath =~ $search_string(.*) ]]
+        dirtypath="${dirtypath/\$\{HOME\}/$HOME}" 
         dirtypath="${dirtypath/\$\{RUNUSER\}/$XDG_RUNTIME_DIR}"
         dirtypath="${dirtypath/\$\{DOWNLOADS\}/$HOME\/Downloads}"
         # sanitize path and only allow characters that occur in firejail profiles
-        imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')"
+        # fixme1: add a proper way handle comments '#' and whitespaces ' '
+        imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')" # fixme: replace tr with bash expensions
 
-        for path in $dirtypath;do
+        for path in $dirtypath;do # loop here, since dirtypath can also be '$XDG_RUNTIME_DIR/psd/*firefox*' which here resolves possibly into multiple paths
           [[ -e "$path" ]] && printf '%s\n' "$path"
         done
       done < <(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file")
+      #done <$file
     done
     unset include_files
   }
 
   # add whitelist files filtered by search_string to array_name
   #
-  # whitelist_to_array search_string array_name
+  # Usage: whitelist_to_array search_string array_name
   whitelist_to_array(){
     local search_string="$1"
     local arrayname="$2"
@@ -185,7 +193,7 @@ load_firejail_profile(){
   # and recursively all includes from the main profile
   get_include_files "$profile_path"
 
-  # add filtered white list firejail files to the propper array
+  # add filtered white list firejail files to the proper array
   whitelist_to_array '^whitelist ' 'rw_files'
   whitelist_to_array '^read-only ' 'ro_files'
   whitelist_to_array '^whitelist-ro ' 'ro_files'
