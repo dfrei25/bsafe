@@ -29,3 +29,7 @@ bJail -p=firefox bash    # launch a shell with firefox profile active
 - find a better parsing solution for firejail profiles, add ${PICTURES} ${VIDEOS} and possibly other missed variables.
 - implement suggestions from #bash irc
 - awaiting feedback/adding community ideas
+
+
+## Credits
+- Thanks to Soliton, Earnestly, ano, monkfish and izabera from [#bash on libra.chat irc]
