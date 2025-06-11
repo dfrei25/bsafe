@@ -157,7 +157,7 @@ load_firejail_profile_path(){
     ro_files+=("$1")
   }
   
-  IFS=' '; while read -r directive argument;do
+  local IFS=' '; while read -r directive argument;do
     # skip parsing commented lines
     if [[ $directive != '#'* ]];then
       # Strip off any trailing comments.
