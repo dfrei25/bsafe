@@ -23,13 +23,11 @@ bsafe -p=firefox bash    # launch a shell with firefox profile active
 
 
 ## Todo:
-- Seccomp fine gained support is planed, utilizing bwraps `--seccomp` feature.
 - As this project started locally as a little personal script, future rework will be done increasing readability
 - split the script into more files, making it easier to maintain
-- find a better parsing solution for firejail profiles, add ${PICTURES} ${VIDEOS} and possibly other missed variables.
-- implement suggestions from #bash irc
+- add seccomp ${PICTURES} ${VIDEOS} and possibly other missed variables/directives to firejail parsing
 - awaiting feedback/adding community ideas
-
 
 ## Credits
 - Thanks to Soliton, Earnestly, ano, monkfish and izabera from [#bash on libra.chat irc]
+- Special thanks to Earnestly for the code rework, which brought new ideas to the code
