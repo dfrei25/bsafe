@@ -8,7 +8,8 @@
 # adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
 firejail_profile_dir="/etc/firejail"
 
-
+#set -x
+#PS4='+ $(date "+%s.%N"): '  # Add timestamp to each line
 #### global variables/arrays
 
 # array for files with read/write access and environment variables
@@ -139,6 +140,8 @@ remove_items_from_array(){
 load_firejail_profile_path(){
   local profile_path="$1"
 
+  ! [[ -r "$profile_path" ]] && return 1
+
   [[ -n $verbose ]] && echo "Loading firejail profile $profile_path"
   resolve_glob(){
     local file glob=$1 IFS=
@@ -148,14 +151,6 @@ load_firejail_profile_path(){
       [[ -r $file ]] && "$@" "$file"
     done
   }
-  rw_file_add(){
-    rw_files+=("$1")
-  }
-  ro_file_add(){
-    ro_files+=("$1")
-  }
-
-  ! [[ -r "$profile_path" ]] && return 1
   
   IFS=' '; while read -r directive argument;do
     # skip parsing commented lines
@@ -180,11 +175,11 @@ load_firejail_profile_path(){
         include)
           resolve_glob "$firejail_profile_dir/$argument" load_firejail_profile_path ;;
         whitelist)
-          resolve_glob "$argument" rw_file_add ;;
+          rw_files+=("$(resolve_glob "$argument")");;
         read-only)
-          resolve_glob "$argument" ro_file_add ;;
+          ro_files+=("$(resolve_glob "$argument")");;
         whitelist-ro)
-          resolve_glob "$argument" ro_file_add ;;
+          ro_files+=("$(resolve_glob "$argument")");;
         # seccomp) #todo
       esac
     fi
@@ -193,36 +188,25 @@ load_firejail_profile_path(){
 
 # build the final bwrap arguments
 build_bwrap_args_array() {
-  local sorted_unique line
-  
-  # TODO: deduplicate code
-  # 1) Process read-write files
-  if [[ ${#rw_files[@]} -gt 0 ]]; then
-    # Deduplication using sort -u
-    sorted_unique=$(printf '%s\n' "${rw_files[@]}" | sort -u)
-    while IFS= read -r line; do
-      # no file provided or it doesn't exist/is not readable
-      [[ -z "$line" || ! -r "$line" ]] && continue
-      bwrap_args+=(--bind "$line" "$line")
-    done <<< "$sorted_unique"
-  fi
-  
-  # 2) Process read-only files
-  if [[ ${#ro_files[@]} -gt 0 ]]; then
-    # Deduplication using sort -u
-    sorted_unique=$(printf '%s\n' "${ro_files[@]}" | sort -u)
-    while IFS= read -r line; do
-      # no file provided or it doesn't exist/is not readable
-      [[ -z "$line" || ! -r "$line" ]] && continue
-      bwrap_args+=(--ro-bind "$line" "$line")
-    done <<< "$sorted_unique"
-  fi
+  local -A rwset roset
+  local envvar IFS=
 
-  # 3) Process environment variables
-  # FIXME: Currently breaks in case envvar contains spaces
-  local var
-  for var in "${env_vars[@]}"; do
-    [[ -n "${!var:-}" ]] && bwrap_args+=(--setenv "$var" "${!var}")
+  for file in ${rw_files[@]};do
+    rwset["$file"]= # deduplication
+  done
+  for file in ${!rwset[@]};do
+    [[ -r "$file" ]] && bwrap_args+=(--bind "$file" "$file")
+  done
+
+  for file in ${ro_files[@]};do
+    roset["$file"]=
+  done
+  for file in ${!roset[@]};do
+    [[ -r "$file" ]] && bwrap_args+=(--ro-bind "$file" "$file")
+  done
+   
+  for var in ${env_vars[@]}; do
+    [[ -n "${!var:-}" ]] && bwrap_args+=(--setenv $var "${!var}")
   done
 }
 
@@ -393,8 +377,8 @@ allow_term() {
     "COLORTERM"
     "EDITOR"
     "INFOPATH"
-    # "LESS"
-    # "LESSOPEN"
+    "LESS"
+    "LESSOPEN"
     "LEX"
     "MANPAGER"
     "MANPATH"
@@ -561,7 +545,7 @@ if [[ $dryrun ]]; then
     printf 'bwrap --seccomp 10 %s %s %s 10< filter.bpf\n\n' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
     printf 'Seccomp blacklist:\n\n%s\n' "${seccomp_blacklist[*]}"
   else
-    printf 'bwrap %s %s %s' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
+    printf 'bwrap %s %s %s\n' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
   fi
 else
   # fd 9 is used to pass bwrap_args
