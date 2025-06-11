@@ -17,7 +17,7 @@ declare -a rw_files ro_files env_vars
 # array that will store all final arguments for bwrap
 declare -a bwrap_args=()
 # default runtime switches, see help
-declare dryrun="" verbose="" use_seccomp="BLOCK"
+declare dryrun="" verbose="" use_seccomp="block"
 # the set of permissions to be served to the application
 declare application_profile=""
 # the main firejail profile for the application
@@ -200,22 +200,22 @@ build_bwrap_args_array() {
   local -A rwset roset
   local envvar IFS=
 
-  for file in ${rw_files[@]};do
+  for file in "${rw_files[@]}";do
     rwset["$file"]= # deduplication
   done
-  for file in ${!rwset[@]};do
+  for file in "${!rwset[@]}";do
     [[ -r "$file" ]] && bwrap_args+=(--bind "$file" "$file")
   done
 
-  for file in ${ro_files[@]};do
+  for file in "${ro_files[@]}";do
     roset["$file"]=
   done
-  for file in ${!roset[@]};do
+  for file in "${!roset[@]}";do
     [[ -r "$file" ]] && bwrap_args+=(--ro-bind "$file" "$file")
   done
    
-  for var in ${env_vars[@]}; do
-    [[ -n "${!var:-}" ]] && bwrap_args+=(--setenv $var "${!var}")
+  for envvar in "${env_vars[@]}"; do
+    [[ -n "${!envvar:-}" ]] && bwrap_args+=(--setenv "$envvar" "${!envvar}")
   done
 }
 
@@ -242,7 +242,7 @@ gen_bpf_filter(){
       modeflag='-b'
       ;;
   esac
-  ./gen-filter $modeflag ${seccomp_blacklist[@]}
+  ./gen-filter $modeflag ${seccomp_blacklist[@]} 1>/dev/null # 
 }
 
 
@@ -298,7 +298,7 @@ if [[ $dryrun ]]; then
 else
   # fd 9 is used to pass bwrap_args
   if [[ $use_seccomp ]]; then
-    gen_bpf_filter 1>/dev/null # generate the seccomp filter cbpf file based on our blacklist silent
+    gen_bpf_filter # generate the seccomp filter cbpf file based on our blacklist
     (sleep 5 && rm /tmp/filter.bpf 2> /dev/null)&
     bwrap --args 9 --seccomp 10 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}") 10< /tmp/filter.bpf
   else
