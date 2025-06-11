@@ -1,4 +1,4 @@
-# bJail
+# bsafe
 
 a lightweight rootless profile based sandbox solution using bwrap.
 
@@ -6,17 +6,17 @@ a lightweight rootless profile based sandbox solution using bwrap.
 
 ## Running the sandbox
 
-To start the sandbox, prefix your command with `bJail`:
+To start the sandbox, prefix your command with `bsafe`:
 
 ```bash
-bJail firefox            # starting Mozilla Firefox
-bJail --help             # show usage and examples
-bJail -d -s discord      # dryrun & print the bwrap command that would be executed starting discord
-bJail -p=firefox bash    # launch a shell with firefox profile active
+bsafe firefox            # starting Mozilla Firefox
+bsafe --help             # show usage and examples
+bsafe -d -s discord      # dryrun & print the bwrap command that would be executed starting discord
+bsafe -p=firefox bash    # launch a shell with firefox profile active
 ```
 
 ## Compared startup time
-![podman firejail and bJail startup times compared](/assets/images/startuptime.jpg)
+![podman firejail and bsafe startup times compared](/assets/images/startuptime.jpg)
 
 ## Profile demo
 ![home folder files visible to sandboxed firefox](/assets/images/profiledemo.jpg)

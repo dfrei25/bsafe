@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# bstart: rootless script to sandbox applications using bwrap, importing/using official firejail rule sets
+# bsafe: rootless script to sandbox applications using bwrap, importing/using official firejail rule sets
 
 
 # adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
