@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# bsafe: rootless script to sandbox applications using bwrap, importing/using official firejail rule sets
+# bsafe: rootless script to sandbox applications using bwrap, importing/using official firejail rule sets. Now also supports seccomp filtering.
+#
+# see --help/show_help() for usage and examples
 
 
 # adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
@@ -8,22 +10,19 @@ firejail_profile_dir="/etc/firejail"
 
 
 #### global variables/arrays
-#set -x
-# array for files with read/write access
-declare -a rw_files=() 
-declare -a ro_files=()
-# array for all environment variables to permit
-declare -a env_vars=()
+
+# array for files with read/write access and environment variables
+declare -a rw_files ro_files env_vars
 # array that will store all final arguments for bwrap
 declare -a bwrap_args=()
 # optional runtime switches, see help
-declare showcommand dryrun verbose
+declare dryrun verbose use_seccomp
 # the set of permissions to be served to the application
 declare application_profile=""
 # the main firejail profile for the application
 declare firejail_profile=""
 # command running in bwrap sandbox...
-declare _command=""
+declare executable=""
 # ...and it's arguments
 declare -a command_arguments=()
 
@@ -35,26 +34,38 @@ show_help() {
 Usage: $0 [option] command args
 
 Options:
-  -h, --help              # print this help
-  -s, --showcommand       # print the bwrap command to be executed
-  -d, --dryrun            # don't execute the command
-  -v, --verbose           # more output
-  -p=name, --profile=name # manual select a profile
+  -h, --help               # print this help
+  -d, --dryrun             # print the bwrap command that would be executed and exit
+  -v, --verbose            # more output
+  -p=name, --profile=name  # manual select a profile
+  -s, --seccomp            # use seccomp to block system calls, based on profiles
+  -l, --seccomp-log        # like -s, but log prohibited syscalls from blacklist
+                           # to dmesg (useful/needed when building/fixing profiles)
+                           # missing-syscall-helper.sh will help you.
 
 Examples:
-  $0 firefox google.com   # Open google.com in sandboxed firefox
-  $0 steam                # Start sandboxed steam
-  $0 -p=firefox dolphin   # Open Dolphin with firefox profile
-  $0 -s -d discord        # Show discord launch command, but do not execte
-  $0 zsh                  # Start sandboxed shell
-
+  $0 firefox google.com    # Open google.com in sandboxed firefox
+  $0 -s steam              # Start sandboxed steam with syscall blacklist active
+  $0 -s strace ls          # Verify seccomp rules (not permitted error)
+  $0 -l strace ls          # Debug seccomp rules (success) -> audit message in dmesg
+  $0 -p=firefox dolphin    # Open Dolphin with firefox profile to
+                           # verify what files firefox would be able to see
+  $0 -d discord            # Show discord launch command, but do not start discord
+  $0 -d -s discord         # As above, but also show active seccomp blacklist
+  $0 bash                  # Start sandboxed shell
 EOF
 }
 
-# Check: Is bwrap command available?
+# check if requirements are met or exit
 validate_requirements() {
+  # Is bwrap command available?
   if ! command -v bwrap &>/dev/null; then
     echo "Error: bubblewrap (bwrap) is not installed or not in PATH"
+    exit 1
+  fi
+  # Change directory to where bJail is located
+  if ! cd -- "$(dirname -- "$( realpath -- "${BASH_SOURCE[0]}" )")" &> /dev/null;then
+    echo "Failed to change to script directory"
     exit 1
   fi
 }
@@ -64,6 +75,7 @@ parse_userinput() {
   # no arguments provided
   [[ $# -eq 0 ]] && echo "Error: No command specified" >&2 && show_help && exit 1
   
+  # 1) parse bJail arguments
   for i in "$@"; do
     case $i in
       -h|--help)
@@ -73,8 +85,12 @@ parse_userinput() {
         application_profile="${1#*=}"
         shift # next argument
         ;;
-      -s|--showcommand)
-        showcommand=1
+      -s|--seccomp)
+        use_seccomp="block"
+        shift
+        ;;
+      -l|--seccomp-log)
+        use_seccomp="log"
         shift
         ;;
       -d|--dryrun)
@@ -92,12 +108,12 @@ parse_userinput() {
     esac
   done
 
-  # parse command and check if it is valid
+  # 2) parse executable, check if it is valid
   if command -v "$1" >/dev/null 2>&1; then
-    _command="$1"
+    executable="$1"
     shift
   else
-    echo "Error: Command \"""$1""\" not found" >&2
+    echo "Error: Command \"""$1""\" is not installed or not in PATH"
     exit 1
   fi
 
@@ -105,109 +121,74 @@ parse_userinput() {
   command_arguments=("${@}")
 }
 
-# Load a firefail.profile file by first recursively adding all includes
-# and then parsing/importing whitelist directories/files to rw_files or ro_files arrays
-# 
-# Usage: load_firejail_profile profile_path
+# Remove a list of items from a given array (removing blacklisted items)
 #
-load_firejail_profile(){
+# Example: arr1=(a b c d e); rm_arr=(b d); remove_items_from_array arr1 "${rm_arr[@]}"; echo ${arr1[@]} -> a c e
+remove_items_from_array(){
+  local -n arrayref="$1"
+  shift
 
-  if ! cd "$firejail_profile_dir" 2>/dev/null; then # also change dir
-    echo "Warning: Firejail profile directory '$firejail_profile_dir' not found, firejail profile based white list permissions will be missing." >&2
-    return 1
-  fi
-  
-  local profile_path="$1"
-  local -a include_files=()
-
-  # return if firejail profile does not exist
-  if ! [[ -r "$profile_path" ]];then
-    cd "$OLDPWD" || return 1 # return to suppress shellcheck warning
-    return 1
-  fi
-
-  # Recursively get all include files from the provided firejail profile 
-  # file and add them to the array include_files 
-  #
-  # Usage: get_include_files profile_path
-  #
-  get_include_files(){
-    local profile_path="$1"
-
-    while IFS= read -r sub_profile_path;do
-      if [[ -r "$sub_profile_path" ]];then
-        include_files+=("$sub_profile_path")
-        [[ -n "$debug" ]] && echo "+include $sub_profile_path"
-        get_include_files "$sub_profile_path"
-      fi
-    done < <(awk '/^include.*\.profile$/ || /^include.*\.inc$/ { if ($2 !~ /^disable.*/) print $2 }' "$profile_path")
-  }
-
-  # Print all whitelist paths filtered by search_string from filenames
-  # provided in local array include_files
-  #
-  # Usage: print_firejail_whitelist search_string -> newline separated list of strings
-  #
-  # Example: include_files=("/etc/firejail/firefox.profile"); print_firejail_whitelist "^whitelist " -> 
-  #          ${HOME}/.cache/mozilla/firefox
-  #          ${HOME}/.mozilla
-  #          [...]
-  #
-  print_firejail_whitelist(){
-    local search_string="$1"
-
-    for file in "${include_files[@]}";do
-      while IFS= read -r dirtypath;do
-        #[[ $dirtypath =~ $search_string(.*) ]] # attempt with bash expansions
-        dirtypath="${dirtypath/\$\{HOME\}/$HOME}" 
-        dirtypath="${dirtypath/\$\{RUNUSER\}/$XDG_RUNTIME_DIR}"
-        dirtypath="${dirtypath/\$\{DOWNLOADS\}/$HOME\/Downloads}"
-        # sanitize path and only allow characters that occur in firejail profiles
-        # fixme1: add a proper way handle comments '#' and whitespaces ' '
-        imported_path="$(echo "$imported_path" |tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?')" # fixme: replace tr with bash expensions
-
-        IFS=;for path in $dirtypath;do # loop here, since dirtypath can also be '$XDG_RUNTIME_DIR/psd/*firefox*' which here resolves possibly into multiple paths
-        #while IFS= read -r path; do
-          [[ -e "$path" ]] && printf '%s\n' "$path"
-        #done <<<$dirtypath
-        done
-      done < <(awk -v search="$search_string" '$0 ~ search { sub(search, ""); print $1 }' "$file")
-      #done <$file # attempt with bash expansions 
+  for item in "$@";do
+    for i in "${!arrayref[@]}";do
+      [[ ${arrayref[i]} == "$item" ]] && unset 'arrayref[i]'
     done
-    #unset include_files
+  done
+}
+
+# Load firejail .profile files recursively
+load_firejail_profile_path(){
+  local profile_path="$1"
+
+  [[ -n $verbose ]] && echo "Loading firejail profile $profile_path"
+  resolve_glob(){
+    local file glob=$1 IFS=
+    shift
+
+    for file in $glob;do
+      [[ -r $file ]] && "$@" "$file"
+    done
+  }
+  rw_file_add(){
+    rw_files+=("$1")
+  }
+  ro_file_add(){
+    ro_files+=("$1")
   }
 
-  # add whitelist files filtered by search_string to array_name
-  #
-  # Usage: whitelist_to_array search_string array_name
-  whitelist_to_array(){
-    local search_string="$1"
-    local arrayname="$2"
-
-    while IFS= read -r whitelist_file;do
-      #[[ -n $debug ]] && echo "+$arrayname $whitelist_file"
-      eval "$arrayname"'+=("$whitelist_file")'
-    done < <(print_firejail_whitelist "$search_string")
-  }
-
-  # add the main profile to include files
-  include_files+=("$profile_path")
-  # and recursively all includes from the main profile
-  get_include_files "$profile_path"
-
-  # add filtered white list firejail files to the proper array
-  whitelist_to_array '^whitelist ' 'rw_files'
-  whitelist_to_array '^read-only ' 'ro_files'
-  whitelist_to_array '^whitelist-ro ' 'ro_files'
-
-  if [[ -n "$debug" ]];then
-    printf '\nrw_files:\n\n %s\n' "${rw_files[*]}"
-    printf '\nro_files:\n\n %s\n' "${ro_files[*]}"
-  fi
-
-  cd "$OLDPWD" || return 1 # change back dir
+  ! [[ -r "$profile_path" ]] && return 1
   
-  [[ -n $verbose ]] && echo "Loaded firejail profile: $firejail_profile"
+  IFS=' '; while read -r directive argument;do
+    # skip parsing commented lines
+    if [[ $directive != '#'* ]];then
+      # Strip off any trailing comments.
+      # XXX Does not trim trailing whitespace.
+      argument=${argument%%#*}
+
+      # XXX add videos and other firejail variables
+      argument=${argument/\$\{HOME\}/$HOME}
+      argument=${argument/\$\{RUNUSER\}/$XDG_RUNTIME_DIR}
+      argument=${argument/\$\{DOWNLOADS\}/$HOME\/Downloads}
+
+      # Remove all non-portable characters.
+      # XXX This sort of thing should be minimised or removed if
+      #     possible.
+      #argument=${argument//[!a-zA-Z0-9\/.-\*\[\]\$\{\}\:+_\?]}
+      #argument="$(tr -cd 'a-zA-Z0-9/.\-\*[]${}:+_?\ \n' <<<"$argument")" # fixme: replace tr with bash expensions
+
+
+      case $directive in
+        include)
+          resolve_glob "$firejail_profile_dir/$argument" load_firejail_profile_path ;;
+        whitelist)
+          resolve_glob "$argument" rw_file_add ;;
+        read-only)
+          resolve_glob "$argument" ro_file_add ;;
+        whitelist-ro)
+          resolve_glob "$argument" ro_file_add ;;
+        # seccomp) #todo
+      esac
+    fi
+  done < "$profile_path"
 }
 
 # build the final bwrap arguments
@@ -245,6 +226,32 @@ build_bwrap_args_array() {
   done
 }
 
+# build the filter.bpf file, used by bwrap
+gen_bpf_filter(){
+  # first build the cBPF generator (helper tool to generate seccomp cBPF files)
+  # when it does not exist yet, see gen-filter.cpp for source code
+  if ! [[ -r ./gen-filter ]];then
+    if echo '#include <seccomp.h>' | g++ -x c++ - -c -o /dev/null &>/dev/null; then
+      make
+    else
+      echo seccomp.h from libseccomp is available, cannot create seccomp filters.
+      unset use_seccomp
+      return 1
+    fi
+  fi
+
+  local modeflag
+  case $use_seccomp in
+    log)
+      modeflag='-l'
+      ;;
+    block)
+      modeflag='-b'
+      ;;
+  esac
+  ./gen-filter $modeflag ${seccomp_blacklist[@]}
+}
+
 
 #### Profile categories
 
@@ -276,10 +283,6 @@ allow_basics() {
     --tmpfs /tmp
     --tmpfs /run
     --tmpfs /home
-    --ro-bind /etc /etc  # might wanna not allow this in future
-    --ro-bind /sys /sys
-    --ro-bind /usr /usr  # might wanna not allow this in future
-    --ro-bind /opt /opt
     --symlink usr/lib /lib
     --symlink usr/lib64 /lib64
     --symlink usr/bin /bin
@@ -374,9 +377,7 @@ allow_dbus() {
   )
 
   if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-    local dbusdir
-    dbusdir=$(echo "${DBUS_SESSION_BUS_ADDRESS}" | sed -e 's/.*unix:path=//' -e 's/,.*$//')
-    rw_files+=("$dbusdir")
+    rw_files+=("${DBUS_SESSION_BUS_ADDRESS//unix:path=/}")
   fi
   
   local atspi_dir="$XDG_RUNTIME_DIR/at-spi"
@@ -417,14 +418,9 @@ allow_rwhome() {
   )
 }
 
+# Use the same namespace as the real user
 allow_userns() {
-  local new_bwrap_args=()
-  local arg
-  for arg in "${bwrap_args[@]}"; do
-    # re-add all but --unshare-user arg to the new array
-    [[ "$arg" != "--unshare-user" ]] && new_bwrap_args+=("$arg")
-  done
-  bwrap_args=("${new_bwrap_args[@]}")
+  remove_items_from_array bwrap_args "--unshare-user" 
 }
 
 allow_games() {
@@ -446,18 +442,24 @@ allow_psd() {
   rw_files+=("$XDG_RUNTIME_DIR/psd")
 }
 
-# permission settings per app
-# categories: gui sound dbus userns net games term screenshot_dir psd rwhome
-select_profile(){
-  local app_profile="$1"
 
-  case $1 in
+#### seccomp profiles, wip.
+# Currently using a long but commented blacklist (see syscall_blacklist.inc.sh)
+# using all jirejail entities but removed ones plus a few other critical ones
+# run tools/compare_firejail_blacklist.sh for details
+syscalls_ipc=(msgctl msgget msgrcv msgsnd shmctl shmdt shmget shmat semctl semget semop semtimedop)
+
+
+#### permission settings per app
+load_application_profile(){
+  case $application_profile in
     steam)
       allow_gui
       allow_sound
       allow_dbus
       allow_net
       allow_games
+      seccomp_whitelist+=(pivot_root mount umount2)
       ;;
     zsh)
       allow_gui
@@ -465,7 +467,7 @@ select_profile(){
       allow_net
       allow_term
       ro_files+=("$HOME/.zshrc")
-      #bwrap_args+=(--setenv PS1 '(bwrap)[%F{green}%n%f@%F{blue}%m%B%~%b%f]') # sandbox indicator
+      bwrap_args+=(--setenv PS1 "\(bwrap\)\$PS1") # sandbox indicator
       ;;
     discord)
       allow_gui
@@ -475,6 +477,7 @@ select_profile(){
       allow_sound
       rw_files+=("$HOME/.config/discord")
       ro_files+=(/opt/discord)
+      seccomp_whitelist+=(unshare chroot)
       ;;
     google-chrome-stable)
       allow_gui
@@ -492,6 +495,7 @@ select_profile(){
         "MOZ_GMP_PATH"
       )
       firejail_profile="firefox-esr"
+      seccomp_whitelist+=(unshare chroot kcmp)
       ;;
     hexchat)
       allow_gui
@@ -499,30 +503,32 @@ select_profile(){
       allow_dbus
       allow_net
       ;;
+    untrusted)
+      seccomp_blacklist+=("${syscalls_ipc[@]}" socket mprotect pkey_mprotect)
+      bwrap_args+=(--disable-userns) # sets user.max_user_namespaces=1
+      ;;      
     *)
-      return 1;
+      return 1
       ;;
   esac
-
-  # when no firejail profile got selected, default to app_profile
-  if [[ -z $firejail_profile ]];then
-    firejail_profile="$app_profile"
-  fi
-
-  # try to load firejail profile
-  load_firejail_profile "$firejail_profile.profile"
+  
+  # Remove the whitelisted syscalls from blacklist
+  remove_items_from_array seccomp_blacklist "${seccomp_whitelist[@]}"
 }
 
 
-#### Main execution
+######## Main execution ########
 
 # check if requirements are met and arguments are correct
 validate_requirements
 
-# apply options like "showcommand" and seperate them from _command and command_arguments
+# apply options like "showcommand" and seperate them from executable and command_arguments
 parse_userinput "${@}"
 
-# black everything first, we start from scratch
+# when desired, load seccomp related functions and populate seccomp blacklist
+[[ -n $use_seccomp ]] && source syscall_blacklist.inc.sh
+
+# block everything first, we start from scratch
 restrict_everything
 
 # load "fundamental" permissions, like accessing /usr/bin
@@ -530,22 +536,40 @@ allow_basics
 
 # when no application profile got manually selected, default to command
 if [[ -z $application_profile ]];then
-  application_profile="${_command}"
+  application_profile="${executable}"
+fi
+
+# when no firejail profile got manually selected, default to application profile
+if [[ -z $firejail_profile ]];then
+  firejail_profile="${application_profile}"
 fi
 
 # load application profile (if existing)
-if select_profile "$application_profile";then
-  [[ -n $verbose ]] && echo "Loaded application profile: $application_profile"
-fi
+load_application_profile
+
+# load firejail profile (if existing)
+load_firejail_profile_path "$firejail_profile_dir/$firejail_profile.profile"
 
 # build final bwrap argument list
 build_bwrap_args_array
 
-# print command when desired
-[[ -n $showcommand ]] && printf '\nThe following command will be executed:\n\nbwrap %s\n\n' "${bwrap_args[*]}"
+# Print or run the command
+if [[ $dryrun ]]; then
+  printf '\nThe following command would be executed:\n\n'
 
-# quit without executing the command when selected
-[[ -n $dryrun ]] &&  exit 0
-
-# Run the command
-bwrap --args 9 "${_command}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}")
+  if [[ $use_seccomp ]]; then
+    printf 'bwrap --seccomp 10 %s %s %s 10< filter.bpf\n\n' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
+    printf 'Seccomp blacklist:\n\n%s\n' "${seccomp_blacklist[*]}"
+  else
+    printf 'bwrap %s %s %s' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
+  fi
+else
+  # fd 9 is used to pass bwrap_args
+  if [[ $use_seccomp ]]; then
+    gen_bpf_filter 1>/dev/null # generate the seccomp filter cbpf file based on our blacklist silent
+    (sleep 5 && rm /tmp/filter.bpf 2> /dev/null)&
+    bwrap --args 9 --seccomp 10 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}") 10< /tmp/filter.bpf
+  else
+    bwrap --args 9 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}")
+  fi
+fi
