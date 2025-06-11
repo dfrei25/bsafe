@@ -242,7 +242,16 @@ gen_bpf_filter(){
       modeflag='-b'
       ;;
   esac
-  ./gen-filter $modeflag ${seccomp_blacklist[@]} 1>/dev/null # 
+  set -x
+  declare -p IFS
+  declare -p seccomp_blacklist
+  echo 1---
+  ./gen-filter $modeflag "${seccomp_blacklist[@]}"
+  echo 2---
+  ./gen-filter $modeflag "${seccomp_blacklist[*]}"
+  echo 3---
+  ./gen-filter $modeflag ${seccomp_blacklist[@]}
+  set +x
 }
 
 
