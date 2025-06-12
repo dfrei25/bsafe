@@ -157,9 +157,10 @@ load_firejail_profile_path(){
     ro_files+=("$1")
   }
   
-  local IFS=' '; while read -r directive argument;do
+  while IFS=' ' read -r directive argument;do
     # skip parsing commented lines
     if [[ $directive != '#'* ]];then
+      [[ $argument == disable* ]] && continue
       # Strip off any trailing comments.
       # XXX Does not trim trailing whitespace.
       argument=${argument%%#*}
@@ -198,7 +199,7 @@ load_firejail_profile_path(){
 # build the final bwrap arguments
 build_bwrap_args_array() {
   local -A rwset roset
-  local envvar IFS=
+  local envvar
 
   for file in "${rw_files[@]}";do
     rwset["$file"]= # deduplication
