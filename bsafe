@@ -4,11 +4,10 @@
 #
 # see --help/show_help() for usage and examples
 
-
 # adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
 firejail_profile_dir="/etc/firejail"
 
-[[ -n "$debug" ]] && set -x && PS4='+ $(date "+%s.%N"): '  # Add timestamp to each line
+[[ -n "$debug" ]] && set -x && PS4='+ $(date "+%s.%N"): ' # Add timestamp to each line
 #### global variables/arrays
 
 # array for files with read/write access and environment variables
@@ -26,11 +25,10 @@ declare executable=""
 # ...and it's arguments
 declare -a command_arguments=()
 
-
 #### functions
 
 show_help() {
-  cat << EOF
+  cat <<EOF
 Usage: $0 [option] command args
 
 Options:
@@ -63,7 +61,7 @@ validate_requirements() {
     exit 1
   fi
   # Change directory to where bJail is located
-  if ! cd -- "$(dirname -- "$( realpath -- "${BASH_SOURCE[0]}" )")" &> /dev/null;then
+  if ! cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")" &>/dev/null; then
     echo "Failed to change to script directory"
     exit 1
   fi
@@ -73,30 +71,30 @@ validate_requirements() {
 parse_userinput() {
   # no arguments provided
   [[ $# -eq 0 ]] && echo "Error: No command specified" >&2 && show_help && exit 1
-  
+
   # 1) parse bJail arguments
   for i in "$@"; do
     case $i in
-      -h|--help)
+      -h | --help)
         show_help && exit 0
         ;;
-      -p*|--profile*)
+      -p* | --profile*)
         application_profile="${1#*=}"
         shift # next argument
         ;;
-      -s|--seccomp-disable)
+      -s | --seccomp-disable)
         use_seccomp=""
         shift
         ;;
-      -l|--seccomp-log)
+      -l | --seccomp-log)
         use_seccomp="log"
         shift
         ;;
-      -d|--dryrun)
+      -d | --dryrun)
         dryrun=1
         shift
         ;;
-      -v|--verbose)
+      -v | --verbose)
         verbose=1
         shift
         ;;
@@ -123,47 +121,47 @@ parse_userinput() {
 # Remove a list of items from a given array (removing blacklisted items)
 #
 # Example: arr1=(a b c d e); rm_arr=(b d); remove_items_from_array arr1 "${rm_arr[@]}"; echo ${arr1[@]} -> a c e
-remove_items_from_array(){
+remove_items_from_array() {
   local -n arrayref="$1"
   shift
 
-  for item in "$@";do
-    for i in "${!arrayref[@]}";do
+  for item in "$@"; do
+    for i in "${!arrayref[@]}"; do
       [[ ${arrayref[i]} == "$item" ]] && unset 'arrayref[i]'
     done
   done
 }
 
 # Load firejail .profile files recursively
-load_firejail_profile_path(){
+load_firejail_profile_path() {
   local profile_path="$1"
 
   # when no firejail profile got manually selected, default to application profile
-  if [[ -z $firejail_profile ]];then
+  if [[ -z $firejail_profile ]]; then
     firejail_profile="${application_profile}"
   fi
 
   ! [[ -r "$profile_path" ]] && return 1
 
   [[ -n $verbose ]] && echo "Loading firejail profile $profile_path"
-  resolve_glob(){
+  resolve_glob() {
     local file glob=$1 IFS=
     shift
 
-    for file in $glob;do
+    for file in $glob; do
       [[ -r $file ]] && "$@" "$file"
     done
   }
-  rw_file_add(){
+  rw_file_add() {
     rw_files+=("$1")
   }
-  ro_file_add(){
+  ro_file_add() {
     ro_files+=("$1")
   }
-  
-  while IFS=' ' read -r directive argument;do
+
+  while IFS=' ' read -r directive argument; do
     # skip parsing commented lines
-    if [[ $directive != '#'* ]];then
+    if [[ $directive != '#'* ]]; then
       [[ $argument == disable* ]] && continue
       # Strip off any trailing comments.
       # XXX Does not trim trailing whitespace.
@@ -184,20 +182,24 @@ load_firejail_profile_path(){
 
       case $directive in
         include)
-          resolve_glob "$firejail_profile_dir/$argument" load_firejail_profile_path ;;
+          resolve_glob "$firejail_profile_dir/$argument" load_firejail_profile_path
+          ;;
         whitelist)
-          resolve_glob "$argument" rw_file_add ;;
+          resolve_glob "$argument" rw_file_add
+          ;;
           # rw_files+=("$(resolve_glob "$argument")");;
         read-only)
-          resolve_glob "$argument" ro_file_add ;;
+          resolve_glob "$argument" ro_file_add
+          ;;
           # ro_files+=("$(resolve_glob "$argument")");;
         whitelist-ro)
-          resolve_glob "$argument" ro_file_add ;;
+          resolve_glob "$argument" ro_file_add
+          ;;
           # ro_files+=("$(resolve_glob "$argument")");;
-        # seccomp) #todo
+          # seccomp) #todo
       esac
     fi
-  done < "$profile_path"
+  done <"$profile_path"
 }
 
 # build the final bwrap arguments
@@ -205,30 +207,30 @@ build_bwrap_args_array() {
   local -A rwset roset
   local envvar
 
-  for file in "${rw_files[@]}";do
+  for file in "${rw_files[@]}"; do
     rwset["$file"]= # deduplication
   done
-  for file in "${!rwset[@]}";do
+  for file in "${!rwset[@]}"; do
     [[ -r "$file" ]] && bwrap_args+=(--bind "$file" "$file")
   done
 
-  for file in "${ro_files[@]}";do
+  for file in "${ro_files[@]}"; do
     roset["$file"]=
   done
-  for file in "${!roset[@]}";do
+  for file in "${!roset[@]}"; do
     [[ -r "$file" ]] && bwrap_args+=(--ro-bind "$file" "$file")
   done
-   
+
   for envvar in "${env_vars[@]}"; do
     [[ -n "${!envvar:-}" ]] && bwrap_args+=(--setenv "$envvar" "${!envvar}")
   done
 }
 
 # build the filter.bpf file, used by bwrap
-gen_bpf_filter(){
+gen_bpf_filter() {
   # first build the cBPF generator (helper tool to generate seccomp cBPF files)
   # when it does not exist yet, see gen-filter.cpp for source code
-  if ! [[ -r ./gen-filter ]];then
+  if ! [[ -r ./gen-filter ]]; then
     if echo '#include <seccomp.h>' | g++ -x c++ - -c -o /dev/null &>/dev/null; then
       make
     else
@@ -248,15 +250,14 @@ gen_bpf_filter(){
       ;;
   esac
 
-  # call the helper program with our blacklist from syscall_blacklist.inc.sh 
-  # application_profiles 
-  if [[ -n $verbose ]];then
+  # call the helper program with our blacklist from syscall_blacklist.inc.sh
+  # application_profiles
+  if [[ -n $verbose ]]; then
     ./gen-filter "$modeflag" "${seccomp_blacklist[@]}"
   else
-  ./gen-filter "$modeflag" "${seccomp_blacklist[@]}" &>/dev/null
+    ./gen-filter "$modeflag" "${seccomp_blacklist[@]}" &>/dev/null
   fi
 }
-
 
 ######## Execution start ########
 
@@ -301,8 +302,8 @@ else
   # fd 9 is used to pass bwrap_args
   if [[ $use_seccomp ]]; then
     gen_bpf_filter # generate the seccomp filter cbpf file based on our blacklist
-    (sleep 5 && rm /tmp/filter.bpf 2> /dev/null)&
-    bwrap --args 9 --seccomp 10 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}") 10< /tmp/filter.bpf
+    (sleep 5 && rm /tmp/filter.bpf 2>/dev/null) &
+    bwrap --args 9 --seccomp 10 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}") 10</tmp/filter.bpf
   else
     bwrap --args 9 "${executable}" "${command_arguments[@]}" 9< <(printf '%s\0' "${bwrap_args[@]}")
   fi
