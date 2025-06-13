@@ -247,7 +247,14 @@ gen_bpf_filter(){
       modeflag='-b'
       ;;
   esac
-  ./gen-filter "$modeflag" "${seccomp_blacklist[@]}"
+
+  # call the helper program with our blacklist from syscall_blacklist.inc.sh 
+  # application_profiles 
+  if [[ -n $verbose ]];then
+    ./gen-filter "$modeflag" "${seccomp_blacklist[@]}"
+  else
+  ./gen-filter "$modeflag" "${seccomp_blacklist[@]}" &>/dev/null
+  fi
 }
 
 
