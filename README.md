@@ -2,7 +2,8 @@
 
 a lightweight rootless profile based sandbox solution using bwrap.
 
-*(Firejail profile usage is optionally supported, but Firejail has to be installed separately. This will grant access to a much larger set of whitelisted files/directories.)*
+- *Firejail profile usage is optionally supported, but Firejail has to be installed separately. This will grant access to a much larger set of whitelisted files/directories.*
+- *syscall filtering is optionally supported, but you need to have libseccomp installed for compiling the required helper program.*
 
 ## Running the sandbox
 
@@ -11,8 +12,9 @@ To start the sandbox, prefix your command with `bsafe`:
 ```bash
 bsafe firefox            # starting Mozilla Firefox
 bsafe --help             # show usage and examples
-bsafe -d -s discord      # dryrun & print the bwrap command that would be executed starting discord
+bsafe -d discord         # dryrun - print the bwrap command that would be executed starting discord and exit.
 bsafe -p=firefox bash    # launch a shell with firefox profile active
+bsafe -s bash            # start a bash shell with seccomp filtering disabled
 ```
 
 ## Compared startup time
