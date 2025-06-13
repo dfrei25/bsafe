@@ -96,7 +96,7 @@ parse_userinput() {
         dryrun=1
         shift
         ;;
-      -v|verbose)
+      -v|--verbose)
         verbose=1
         shift
         ;;
