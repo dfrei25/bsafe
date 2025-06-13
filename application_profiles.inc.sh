@@ -126,7 +126,7 @@ allow_dbus() {
   if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
     rw_files+=("${DBUS_SESSION_BUS_ADDRESS//unix:path=/}")
   fi
-  
+
   local atspi_dir="$XDG_RUNTIME_DIR/at-spi"
   [[ ! -d "$atspi_dir" ]] && mkdir -p "$atspi_dir" && rw_files+=("$atspi_dir")
   [[ -e /run/dbus/system_bus_socket ]] && rw_files+=(/run/dbus/system_bus_socket)
@@ -167,7 +167,7 @@ allow_rwhome() {
 
 # Use the same namespace as the real user
 allow_userns() {
-  remove_items_from_array bwrap_args "--unshare-user" 
+  remove_items_from_array bwrap_args "--unshare-user"
 }
 
 allow_games() {
@@ -189,19 +189,17 @@ allow_psd() {
   rw_files+=("$XDG_RUNTIME_DIR/psd")
 }
 
-
 #### seccomp profiles, wip.
 # Currently using a long but commented blacklist (see syscall_blacklist.inc.sh)
 # using all jirejail entities but removed ones plus a few other critical ones
 # run tools/compare_firejail_blacklist.sh for details
 syscalls_ipc=(msgctl msgget msgrcv msgsnd shmctl shmdt shmget shmat semctl semget semop semtimedop)
 
-
 #### permission settings per app
-load_application_profile(){
+load_application_profile() {
 
   # when no application profile got manually selected, default to command
-  if [[ -z $application_profile ]];then
+  if [[ -z $application_profile ]]; then
     application_profile="${executable}"
   fi
 
@@ -242,7 +240,7 @@ load_application_profile(){
       allow_sound
       allow_dbus
       allow_net
-      allow_psd  # profile-sync-daemon
+      allow_psd # profile-sync-daemon
       env_vars+=(
         "MOZ_DRM_DEVICE"
         "MOZ_GMP_PATH"
@@ -260,14 +258,12 @@ load_application_profile(){
       seccomp_blacklist+=("${syscalls_ipc[@]}" socket mprotect pkey_mprotect)
       bwrap_args+=(--disable-userns) # sets user.max_user_namespaces=1
 
-      ;;      
+      ;;
     *)
       return 1
       ;;
   esac
-  
+
   # Remove the whitelisted syscalls from blacklist
   remove_items_from_array seccomp_blacklist "${seccomp_whitelist[@]}"
 }
-
-
