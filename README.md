@@ -21,6 +21,7 @@ bsafe -s bash            # start a bash shell with seccomp filtering disabled
 ![podman firejail and bsafe startup times compared](/assets/images/startuptime.jpg)
 
 ## Profile demo
+<img src="assets/images/profiledemo.jpg" alt="profiledemo" width="200"/>
 ![home folder files visible to sandboxed firefox](/assets/images/profiledemo.jpg)
 
 ## Blocked syscall demo
