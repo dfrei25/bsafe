@@ -232,7 +232,7 @@ gen_bpf_filter(){
     if echo '#include <seccomp.h>' | g++ -x c++ - -c -o /dev/null &>/dev/null; then
       make
     else
-      echo seccomp.h from libseccomp is available, cannot create seccomp filters.
+      echo seccomp.h from libseccomp is not available/installed, cannot create seccomp filters.
       unset use_seccomp
       return 1
     fi
