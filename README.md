@@ -21,6 +21,9 @@ bsafe -p=firefox bash    # launch a shell with firefox profile active
 ## Profile demo
 ![home folder files visible to sandboxed firefox](/assets/images/profiledemo.jpg)
 
+## Blocked syscall demo
+![home folder files visible to sandboxed firefox](/assets/images/seccompdemo.jpg)
+
 
 ## Todo:
 - As this project started locally as a little personal script, future rework will be done increasing readability
