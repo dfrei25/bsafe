@@ -32,7 +32,6 @@ allow_basics() {
     --dev-bind /dev /dev # might wanna be more restrictive here
     --tmpfs /tmp
     --tmpfs /run
-    --tmpfs /home
     --symlink usr/lib /lib
     --symlink usr/lib64 /lib64
     --symlink usr/bin /bin
@@ -42,12 +41,12 @@ allow_basics() {
     /etc
     /sys
     /usr
-    /opt
   )
   rw_files+=("$HOME/Downloads") # always available
   env_vars+=(
     "PATH"
     "HOME"
+    "PWD"
     "JAVAC"
     "JAVA_HOME"
     "JDK_HOME"
@@ -76,10 +75,8 @@ allow_sound() {
 allow_net() {
   bwrap_args+=(--share-net)
   ro_files+=(
-    "/run/systemd/resolve"
-    "/etc/resolv.conf"
-    "/etc/nsswitch.conf"
-    "/run/NetworkManager/resolv.conf"
+    /run/systemd/resolve
+    /run/NetworkManager/resolv.conf
   )
 }
 
@@ -202,6 +199,12 @@ syscalls_ipc=(msgctl msgget msgrcv msgsnd shmctl shmdt shmget shmat semctl semge
 
 #### permission settings per app
 load_application_profile(){
+
+  # when no application profile got manually selected, default to command
+  if [[ -z $application_profile ]];then
+    application_profile="${executable}"
+  fi
+
   case $application_profile in
     steam)
       allow_gui
@@ -256,6 +259,7 @@ load_application_profile(){
     untrusted)
       seccomp_blacklist+=("${syscalls_ipc[@]}" socket mprotect pkey_mprotect)
       bwrap_args+=(--disable-userns) # sets user.max_user_namespaces=1
+
       ;;      
     *)
       return 1

@@ -8,8 +8,7 @@
 # adjust this in case you want to use your locally installed firejail profile directory (optional) to import a wider set of whitelist rules
 firejail_profile_dir="/etc/firejail"
 
-#set -x
-#PS4='+ $(date "+%s.%N"): '  # Add timestamp to each line
+[[ -n "$debug" ]] && set -x && PS4='+ $(date "+%s.%N"): '  # Add timestamp to each line
 #### global variables/arrays
 
 # array for files with read/write access and environment variables
@@ -139,6 +138,11 @@ remove_items_from_array(){
 load_firejail_profile_path(){
   local profile_path="$1"
 
+  # when no firejail profile got manually selected, default to application profile
+  if [[ -z $firejail_profile ]];then
+    firejail_profile="${application_profile}"
+  fi
+
   ! [[ -r "$profile_path" ]] && return 1
 
   [[ -n $verbose ]] && echo "Loading firejail profile $profile_path"
@@ -255,10 +259,10 @@ validate_requirements
 # apply options like "showcommand" and seperate them from executable and command_arguments
 parse_userinput "${@}"
 
-# load profile data
+# load application_profiles, see data in application_profiles.inc.sh
 source application_profiles.inc.sh
 
-# when desired, load seccomp related functions and populate seccomp blacklist
+# load seccomp related functions and populate seccomp blacklist
 [[ -n $use_seccomp ]] && source syscall_blacklist.inc.sh
 
 # block everything first, we start from scratch
@@ -266,16 +270,6 @@ restrict_everything
 
 # load "fundamental" permissions, like accessing /usr/bin
 allow_basics
-
-# when no application profile got manually selected, default to command
-if [[ -z $application_profile ]];then
-  application_profile="${executable}"
-fi
-
-# when no firejail profile got manually selected, default to application profile
-if [[ -z $firejail_profile ]];then
-  firejail_profile="${application_profile}"
-fi
 
 # load application profile (if existing)
 load_application_profile
@@ -288,7 +282,7 @@ build_bwrap_args_array
 
 # Print or run the command
 if [[ $dryrun ]]; then
-  printf '\nThe following command would be executed:\n\n'
+  printf 'The following command would be executed:\n\n'
 
   if [[ $use_seccomp ]]; then
     printf 'bwrap --seccomp 10 %s %s %s 10< filter.bpf\n\n' "${bwrap_args[*]}" "${executable}" "${command_arguments[*]}"
