@@ -136,11 +136,6 @@ remove_items_from_array() {
 load_firejail_profile_path() {
   local profile_path="$1"
 
-  # when no firejail profile got manually selected, default to application profile
-  if [[ -z $firejail_profile ]]; then
-    firejail_profile="${application_profile}"
-  fi
-
   ! [[ -r "$profile_path" ]] && return 1
 
   [[ -n $verbose ]] && echo "Loading firejail profile $profile_path"
@@ -281,6 +276,11 @@ allow_basics
 
 # load application profile (if existing)
 load_application_profile
+
+# when no firejail profile got manually selected, default to application profile
+if [[ -z $firejail_profile ]]; then
+  firejail_profile="${application_profile}"
+fi
 
 # load firejail profile (if existing)
 load_firejail_profile_path "$firejail_profile_dir/$firejail_profile.profile"
