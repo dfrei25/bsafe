@@ -41,6 +41,7 @@ allow_basics() {
     /etc
     /sys
     /usr
+    /opt
   )
   rw_files+=("$HOME/Downloads") # always available
   env_vars+=(
@@ -210,7 +211,7 @@ load_application_profile() {
       allow_dbus
       allow_net
       allow_games
-      seccomp_whitelist+=(pivot_root mount umount2)
+      seccomp_whitelist+=(pivot_root mount umount2 get_mempolicy process_vm_readv kcmp sched_setattr i386.kcmp)
       ;;
     zsh)
       allow_gui
@@ -234,6 +235,7 @@ load_application_profile() {
       allow_gui
       allow_sound
       allow_net
+      seccomp_whitelist+=(unshare chroot)
       ;;
     firefox)
       allow_gui
@@ -257,7 +259,9 @@ load_application_profile() {
     untrusted)
       seccomp_blacklist+=("${syscalls_ipc[@]}" socket mprotect pkey_mprotect)
       bwrap_args+=(--disable-userns) # sets user.max_user_namespaces=1
-
+      ;;
+    gui)
+      allow_gui
       ;;
     *)
       return 1
